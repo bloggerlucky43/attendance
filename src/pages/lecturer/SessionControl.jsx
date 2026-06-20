@@ -16,13 +16,21 @@ export function SessionControl() {
   async function startSession() {
     setError(null);
     setLoading(true);
+
     if (!navigator.geolocation) {
       setError("Geolocation not supported on this device.");
       setLoading(false);
       return;
     }
-    navigator.geolocation.getCurrentPosition(
+
+    let settled = false; // prevent double-firing
+
+    const watchId = navigator.geolocation.watchPosition(
       async (pos) => {
+        if (settled) return;
+        settled = true;
+        navigator.geolocation.clearWatch(watchId);
+
         try {
           const { data } = await api.post("/sessions", {
             course_id: courseId,
@@ -40,16 +48,34 @@ export function SessionControl() {
         }
       },
       (err) => {
+        if (settled) return;
+        settled = true;
+        navigator.geolocation.clearWatch(watchId);
+
         const messages = {
-          1: "Location access denied. Enable permissions and retry",
-          2: "Location unavailable. Check your device GPS or network",
-          3: "Location timed out. Move to a better signal area and retry",
+          1: "Location access denied. Enable permissions and retry.",
+          2: "Location unavailable. Check your device GPS or network.",
+          3: "Location timed out. Move to a better signal area and retry.",
         };
-        setError(messages[err.code] || "Failed to get location");
+        setError(messages[err.code] || "Failed to get location.");
         setLoading(false);
       },
-      { enableHighAccuracy: false, timeout: 15000, maximumAge: 30000 },
+      {
+        enableHighAccuracy: true, // ← back to true, watchPosition handles it better
+        timeout: 30000, // ← 30s total budget
+        maximumAge: 60000, // ← accept a 1-min cached fix instantly
+      },
     );
+
+    // Hard safety net: if watchPosition never fires at all (rare browser bug)
+    setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        navigator.geolocation.clearWatch(watchId);
+        setError("Location timed out. Please try again.");
+        setLoading(false);
+      }
+    }, 35000);
   }
 
   async function endSession() {

@@ -17,21 +17,53 @@ export function LecturerDashboard() {
   if (loading) return <Spinner label="Loading courses..." />;
 
   return (
-    <div className="page">
-      <h2>My Courses</h2>
-      <Link to="/lecturer/create-course">+ Create New Course</Link>
+    <div>
+      <div
+        className="page-header"
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+        }}
+      >
+        <div>
+          <h2>My Courses</h2>
+          <p>
+            {courses.length} course{courses.length !== 1 ? "s" : ""} assigned
+          </p>
+        </div>
+        <Link to="/lecturer/create-course" className="btn btn-primary">
+          + New Course
+        </Link>
+      </div>
 
-      <ul>
-        {courses.map((c) => (
-          <li key={c.id}>
-            <strong>{c.course_code}</strong> — {c.course_name}{" "}
-            <Link to={`/lecturer/session/${c.id}`}>Manage Sessions</Link>
-          </li>
-        ))}
-      </ul>
-
-      {courses.length === 0 && (
-        <p>No courses yet. Create one to get started.</p>
+      {courses.length === 0 ? (
+        <div className="empty-state">
+          <div style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>📚</div>
+          <p>No courses yet. Create your first course to get started.</p>
+          <Link
+            to="/lecturer/create-course"
+            className="btn btn-outline"
+            style={{ marginTop: "1rem" }}
+          >
+            Create a Course
+          </Link>
+        </div>
+      ) : (
+        courses.map((c) => (
+          <div className="course-item" key={c.id}>
+            <div>
+              <div className="course-code">{c.course_code}</div>
+              <div className="course-name">{c.course_name}</div>
+            </div>
+            <Link
+              to={`/lecturer/session/${c.id}`}
+              className="btn btn-outline btn-sm"
+            >
+              Manage Sessions
+            </Link>
+          </div>
+        ))
       )}
     </div>
   );

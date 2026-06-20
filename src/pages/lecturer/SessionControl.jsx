@@ -11,25 +11,23 @@ export function SessionControl() {
   const [records, setRecords] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   async function startSession() {
     setError(null);
     setLoading(true);
-
     if (!navigator.geolocation) {
       setError("Geolocation not supported on this device.");
       setLoading(false);
       return;
     }
-
     navigator.geolocation.getCurrentPosition(
-      async (position) => {
+      async (pos) => {
         try {
-          const { latitude, longitude } = position.coords;
           const { data } = await api.post("/sessions", {
             course_id: courseId,
-            classroom_lat: latitude,
-            classroom_lng: longitude,
+            classroom_lat: pos.coords.latitude,
+            classroom_lng: pos.coords.longitude,
             location_radius_meters: 50,
           });
           setSession(data.session);
@@ -42,7 +40,7 @@ export function SessionControl() {
         }
       },
       () => {
-        setError("Could not get your location. Enable location permissions.");
+        setError("Location access denied. Enable permissions and retry.");
         setLoading(false);
       },
       { enableHighAccuracy: true, timeout: 10000 },
@@ -59,65 +57,171 @@ export function SessionControl() {
     }
   }
 
-  function exportCSV() {
+  async function exportCSV() {
     if (!session) return;
-    window.open(
-      `${import.meta.env.VITE_API_URL}/sessions/${session.id}/export?token=${localStorage.getItem("token")}`,
-      "_blank",
-    );
+    try {
+      const res = await api.get(`/sessions/${session.id}/export`, {
+        responseType: "blob",
+      });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `attendance_${session.id.slice(0, 8)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError("Export failed");
+    }
+  }
+
+  async function copyLink() {
+    if (!qrUrl) return;
+    await navigator.clipboard.writeText(qrUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   useEffect(() => {
     if (!session) return;
-
-    function handleNewRecord(payload) {
+    socket.on("attendance:marked", (payload) => {
       setRecords((prev) => [payload, ...prev]);
-    }
-
-    socket.on("attendance:marked", handleNewRecord);
-    return () => socket.off("attendance:marked", handleNewRecord);
+    });
+    return () => socket.off("attendance:marked");
   }, [session]);
 
   return (
-    <div className="page">
-      <h2>Session Control</h2>
+    <div>
+      <div className="page-header">
+        <h2>Session Control</h2>
+        <p>Start an attendance session and share the QR code with your class</p>
+      </div>
 
-      {error && <p className="gate-error">{error}</p>}
+      {error && (
+        <div className="alert alert-error" style={{ maxWidth: 520 }}>
+          {error}
+        </div>
+      )}
 
       {!session && (
-        <button onClick={startSession} disabled={loading}>
-          {loading ? "Starting..." : "Start Session"}
-        </button>
+        <div className="card" style={{ maxWidth: 520 }}>
+          <p
+            style={{
+              color: "var(--text-2)",
+              marginBottom: "1.25rem",
+              fontSize: "0.9rem",
+            }}
+          >
+            Your current location will be used as the classroom coordinates.
+            Students must be within <strong>50 metres</strong> to mark
+            attendance.
+          </p>
+          <button
+            className="btn btn-primary btn-full"
+            onClick={startSession}
+            disabled={loading}
+          >
+            {loading ? "Getting location..." : "Start Attendance Session"}
+          </button>
+        </div>
       )}
 
-      {session && session.status === "active" && (
-        <>
-          <p>
-            Session is live. Students can scan the QR below or use the link.
-          </p>
-          <QRCodeSVG value={qrUrl} size={240} />
-          <p>
-            <a href={qrUrl} target="_blank" rel="noreferrer">
-              {qrUrl}
-            </a>
-          </p>
+      {session?.status === "active" && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: "1rem",
+            maxWidth: 720,
+          }}
+        >
+          <div className="card">
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "1rem",
+              }}
+            >
+              <div className="card-title">QR Code</div>
+              <span className="live-badge">
+                <span className="live-dot" />
+                Live
+              </span>
+            </div>
+            <div className="qr-wrap">
+              <div className="qr-inner">
+                <QRCodeSVG value={qrUrl} size={180} />
+              </div>
+              <p>Students scan this to mark attendance</p>
+            </div>
+            <div className="url-row">
+              <span>{qrUrl}</span>
+              <button className="btn btn-outline btn-sm" onClick={copyLink}>
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </div>
+            <button
+              className="btn btn-danger btn-full"
+              style={{ marginTop: "1rem" }}
+              onClick={endSession}
+            >
+              End Session
+            </button>
+          </div>
 
-          <button onClick={endSession}>End Session</button>
-
-          <h3>Live Attendance ({records.length})</h3>
-          <ul>
-            {records.map((r, i) => (
-              <li key={i}>Student ID: {r.studentId}</li>
-            ))}
-          </ul>
-        </>
+          <div className="card">
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "1rem",
+              }}
+            >
+              <div className="card-title">Live Attendance</div>
+              <span className="badge badge-cyan">{records.length} marked</span>
+            </div>
+            {records.length === 0 ? (
+              <div className="empty-state" style={{ padding: "2rem 1rem" }}>
+                <p>Waiting for students...</p>
+              </div>
+            ) : (
+              <div style={{ maxHeight: 300, overflowY: "auto" }}>
+                {records.map((r, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      padding: "0.6rem 0",
+                      borderBottom: "1px solid var(--border)",
+                      fontSize: "0.85rem",
+                      color: "var(--text-2)",
+                    }}
+                  >
+                    Student checked in
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
-      {session && session.status === "closed" && (
-        <>
-          <p>Session ended.</p>
-          <button onClick={exportCSV}>Export Attendance CSV</button>
-        </>
+      {session?.status === "closed" && (
+        <div className="card" style={{ maxWidth: 520 }}>
+          <div
+            className="alert alert-success"
+            style={{ marginBottom: "1.25rem" }}
+          >
+            Session ended. {records.length} student
+            {records.length !== 1 ? "s" : ""} attended.
+          </div>
+          <button className="btn btn-primary" onClick={exportCSV}>
+            Download CSV Report
+          </button>
+        </div>
       )}
     </div>
   );

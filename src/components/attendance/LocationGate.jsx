@@ -2,45 +2,40 @@ import { useState } from "react";
 import api from "../../lib/api.js";
 
 export function LocationGate({ sessionId, onPassed }) {
-  const [status, setStatus] = useState("idle"); // idle | checking | failed
+  const [status, setStatus] = useState("idle"); // idle | checking | failed | blocked
   const [error, setError] = useState(null);
 
-  function checkLocation() {
+  function check() {
     setStatus("checking");
     setError(null);
-
     if (!navigator.geolocation) {
-      setError("Geolocation is not supported on this device/browser.");
+      setError("Geolocation is not supported on this device.");
       setStatus("failed");
       return;
     }
-
     navigator.geolocation.getCurrentPosition(
-      async (position) => {
+      async (pos) => {
         try {
-          const { latitude, longitude } = position.coords;
           const { data } = await api.post(`/attendance/${sessionId}/location`, {
-            lat: latitude,
-            lng: longitude,
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
           });
-          if (data.passed) {
-            onPassed();
-          }
+          if (data.passed) onPassed();
         } catch (err) {
           const isHardBlock =
             err.response?.status === 403 &&
             err.response?.data?.gate === "location";
-          const msg =
+          setError(
             err.response?.data?.message ||
-            err.response?.data?.error ||
-            "Location check failed";
-          setError(msg);
+              err.response?.data?.error ||
+              "Location check failed",
+          );
           setStatus(isHardBlock ? "blocked" : "failed");
         }
       },
-      (geoErr) => {
+      () => {
         setError(
-          "Could not get your location. Please enable location permissions and try again.",
+          "Could not get your location. Enable location permissions and try again.",
         );
         setStatus("failed");
       },
@@ -50,32 +45,32 @@ export function LocationGate({ sessionId, onPassed }) {
 
   return (
     <div className="gate-card">
-      <h3>Step 1: Verify Location</h3>
-      <p>We need to confirm you're physically in the classroom.</p>
+      <div style={{ fontSize: "2rem", marginBottom: "0.75rem" }}>📍</div>
+      <h3>Location Check</h3>
+      <p>Confirm you're physically in the classroom.</p>
 
       {status === "blocked" && (
-        <div className="gate-error">
-          <p>{error}</p>
-          <p>
-            <strong>
-              You cannot retry this step. Please contact your lecturer.
-            </strong>
-          </p>
+        <div className="alert alert-error">
+          {error}
+          <br />
+          <strong>This is a hard block — contact your lecturer.</strong>
         </div>
       )}
-
       {status === "failed" && (
-        <div className="gate-error">
-          <p>{error}</p>
-          <button onClick={checkLocation}>Try Again</button>
-        </div>
+        <>
+          <div className="alert alert-error">{error}</div>
+          <button className="btn btn-outline btn-full" onClick={check}>
+            Try Again
+          </button>
+        </>
       )}
-
       {(status === "idle" || status === "checking") && (
-        <button onClick={checkLocation} disabled={status === "checking"}>
-          {status === "checking"
-            ? "Checking location..."
-            : "Verify My Location"}
+        <button
+          className="btn btn-primary btn-full"
+          onClick={check}
+          disabled={status === "checking"}
+        >
+          {status === "checking" ? "Checking location..." : "Verify Location"}
         </button>
       )}
     </div>

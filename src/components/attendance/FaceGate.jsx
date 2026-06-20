@@ -1,70 +1,57 @@
 import { useRef, useState, useEffect } from "react";
 import * as faceapi from "face-api.js";
 import api from "../../lib/api.js";
+import { loadFaceModels } from "../../lib/faceModels.js";
 
-const MATCH_THRESHOLD = 0.5; // lower = stricter. face-api.js convention.
+const THRESHOLD = 0.5;
 
 export function FaceGate({ sessionId, storedDescriptor, onPassed }) {
   const videoRef = useRef(null);
-  const [status, setStatus] = useState("loading"); // loading | ready | scanning | failed
+  const [status, setStatus] = useState("loading");
   const [error, setError] = useState(null);
-  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [modelsReady, setModelsReady] = useState(false);
 
   useEffect(() => {
-    async function loadModels() {
-      const MODEL_URL = "/models"; // place face-api.js weight files in /public/models
-      await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
-      ]);
-      setModelsLoaded(true);
+    async function init() {
+      await loadFaceModels();
+      setModelsReady(true);
+      const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+      if (videoRef.current) videoRef.current.srcObject = stream;
       setStatus("ready");
     }
-    loadModels().catch(() => {
-      setError("Failed to load face recognition models.");
+    init().catch(() => {
+      setError("Failed to load camera or models.");
       setStatus("failed");
     });
+    return () => {
+      videoRef.current?.srcObject?.getTracks().forEach((t) => t.stop());
+    };
   }, []);
 
-  async function startCamera() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
-      videoRef.current.srcObject = stream;
-    } catch {
-      setError("Could not access camera. Please allow camera permissions.");
-      setStatus("failed");
-    }
-  }
-
-  async function captureAndCompare() {
+  async function captureAndVerify() {
     setStatus("scanning");
     setError(null);
-
     try {
-      const detection = await faceapi
+      const det = await faceapi
         .detectSingleFace(
           videoRef.current,
           new faceapi.TinyFaceDetectorOptions(),
         )
         .withFaceLandmarks()
         .withFaceDescriptor();
-
-      if (!detection) {
-        setError("No face detected. Make sure your face is clearly visible.");
+      if (!det) {
+        setError("No face detected. Make sure your face is visible.");
         setStatus("ready");
         return;
       }
 
-      const liveDescriptor = detection.descriptor;
-      const stored = new Float32Array(storedDescriptor);
-      const distance = faceapi.euclideanDistance(liveDescriptor, stored);
-      const match = distance < MATCH_THRESHOLD;
+      const distance = faceapi.euclideanDistance(
+        det.descriptor,
+        new Float32Array(storedDescriptor),
+      );
+      const match = distance < THRESHOLD;
 
-      // Stop camera stream
-      const stream = videoRef.current.srcObject;
-      stream?.getTracks().forEach((track) => track.stop());
-
+      videoRef.current?.srcObject?.getTracks().forEach((t) => t.stop());
       const { data } = await api.post(`/attendance/${sessionId}/face`, {
         match,
         distance,
@@ -75,45 +62,55 @@ export function FaceGate({ sessionId, storedDescriptor, onPassed }) {
       } else {
         setError("Face did not match. Please try again.");
         setStatus("ready");
-        startCamera();
+        const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+        if (videoRef.current) videoRef.current.srcObject = stream;
       }
     } catch (err) {
-      const msg = err.response?.data?.error || "Face verification failed";
-      setError(msg);
+      setError(err.response?.data?.error || "Verification failed");
       setStatus("ready");
     }
   }
 
-  useEffect(() => {
-    if (modelsLoaded) startCamera();
-    return () => {
-      const stream = videoRef.current?.srcObject;
-      stream?.getTracks().forEach((track) => track.stop());
-    };
-  }, [modelsLoaded]);
-
   return (
     <div className="gate-card">
-      <h3>Step 2: Face Verification</h3>
-      <p>Look directly at the camera.</p>
+      <div style={{ fontSize: "2rem", marginBottom: "0.75rem" }}>👤</div>
+      <h3>Face Verification</h3>
+      <p>Look directly at the camera, then tap the button.</p>
 
-      {status === "loading" && <p>Loading face recognition models...</p>}
+      {status === "loading" && (
+        <p style={{ color: "var(--text-2)", fontSize: "0.85rem" }}>
+          Loading face recognition...
+        </p>
+      )}
 
-      <video
-        ref={videoRef}
-        autoPlay
-        muted
-        playsInline
-        width="320"
-        height="240"
-      />
+      <div
+        className="camera-wrap"
+        style={{
+          display: status === "loading" ? "none" : "block",
+          marginBottom: "0.75rem",
+        }}
+      >
+        <video
+          ref={videoRef}
+          autoPlay
+          muted
+          playsInline
+          style={{ width: "100%", height: 200, objectFit: "cover" }}
+        />
+      </div>
 
-      {error && <p className="gate-error">{error}</p>}
+      {error && <div className="alert alert-error">{error}</div>}
 
       {status === "ready" && (
-        <button onClick={captureAndCompare}>Capture & Verify</button>
+        <button className="btn btn-primary btn-full" onClick={captureAndVerify}>
+          Verify Face
+        </button>
       )}
-      {status === "scanning" && <p>Verifying...</p>}
+      {status === "scanning" && (
+        <button className="btn btn-primary btn-full" disabled>
+          Comparing face...
+        </button>
+      )}
     </div>
   );
 }

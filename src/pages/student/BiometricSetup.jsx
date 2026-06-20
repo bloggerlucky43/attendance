@@ -1,3 +1,4 @@
+// error received was that the first argument must be of type string or an isntance of buffer,Array Butter or Array or an arraylike object, Received undefined
 import { useRef, useState, useEffect } from "react";
 import * as faceapi from "face-api.js";
 import {

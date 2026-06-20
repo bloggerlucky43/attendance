@@ -39,11 +39,16 @@ export function SessionControl() {
           setLoading(false);
         }
       },
-      () => {
-        setError("Location access denied. Enable permissions and retry.");
+      (err) => {
+        const messages = {
+          1: "Location access denied. Enable permissions and retry",
+          2: "Location unavailable. Check your device GPS or network",
+          3: "Location timed out. Move to a better signal area and retry",
+        };
+        setError(messages[err.code] || "Failed to get location");
         setLoading(false);
       },
-      { enableHighAccuracy: true, timeout: 10000 },
+      { enableHighAccuracy: false, timeout: 15000, maximumAge: 30000 },
     );
   }
 

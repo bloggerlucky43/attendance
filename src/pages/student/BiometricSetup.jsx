@@ -16,6 +16,7 @@ const DETECT_OPTIONS = new faceapi.TinyFaceDetectorOptions({
 
 export function BiometricSetup() {
   const videoRef = useRef(null);
+  const streamRef = useRef(null);
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [profileLoading, setProfileLoading] = useState(true);
   const [videoReady, setVideoReady] = useState(false);
@@ -45,6 +46,8 @@ export function BiometricSetup() {
     if (profileLoading) return; // wait until we know face status
     if (faceStatus === "done") return; // face already registered — skip camera entirely
 
+    let cancelled = false;
+
     async function initCamera() {
       // Load models
       try {
@@ -63,11 +66,20 @@ export function BiometricSetup() {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: "user" },
         });
-        if (videoRef.current) videoRef.current.srcObject = stream;
 
-        videoRef.current.onloadedmetadata = () => {
-          setVideoReady(true);
-        };
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+
+        streamRef.current = stream;
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.onloadeddata = () => {
+            if (!cancelled) setVideoReady(true);
+          };
+        }
       } catch (err) {
         console.error("Camera error:", err.name, err.message);
         if (err.name === "NotAllowedError") {
@@ -92,22 +104,23 @@ export function BiometricSetup() {
 
     initCamera();
     return () => {
+      cancelled = true;
       if (videoRef.current) {
         videoRef.current.onloadeddata = null;
-        videoRef.current.srcObject?.getTracks().forEach((t) => t.stop());
       }
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
     };
-  }, [profileLoading, faceStatus]);
+  }, [profileLoading]);
 
   async function registerFace() {
-    setFaceStatus("scanning");
-    setError(null);
-
     if (!videoRef.current || !videoReady) {
       setError("Camera not ready yet. Wait a moment and try again.");
-      setFaceStatus("idle");
+
       return;
     }
+    setFaceStatus("scanning");
+    setError(null);
 
     try {
       const det = await faceapi
@@ -127,8 +140,8 @@ export function BiometricSetup() {
         face_descriptor: Array.from(det.descriptor),
       });
 
-      setFaceStatus("done");
       videoRef.current?.srcObject?.getTracks().forEach((t) => t.stop());
+      setFaceStatus("done");
     } catch (err) {
       setError(err.response?.data?.error || "Face registration failed");
       setFaceStatus("idle");

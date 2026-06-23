@@ -7,11 +7,18 @@ import {
 } from "@simplewebauthn/browser";
 import api from "../../lib/api.js";
 import { Spinner } from "../../components/common/Spinner.jsx";
+import { loadFaceModels } from "../../lib/faceModels.js";
+
+const DETECT_OPTIONS = new faceapi.TinyFaceDetectorOptions({
+  inputSize: 224,
+  scoreThreshold: 0.5,
+});
 
 export function BiometricSetup() {
   const videoRef = useRef(null);
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [profileLoading, setProfileLoading] = useState(true);
+  const [videoReady, setVideoReady] = useState(false);
 
   // Initialise from DB — face may already be registered
   const [faceStatus, setFaceStatus] = useState("idle"); // idle | scanning | done
@@ -41,11 +48,7 @@ export function BiometricSetup() {
     async function initCamera() {
       // Load models
       try {
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri("/models"),
-          faceapi.nets.faceLandmark68Net.loadFromUri("/models"),
-          faceapi.nets.faceRecognitionNet.loadFromUri("/models"),
-        ]);
+        await loadFaceModels();
         setModelsLoaded(true);
       } catch (err) {
         console.error("Model load error:", err);
@@ -61,6 +64,10 @@ export function BiometricSetup() {
           video: { facingMode: "user" },
         });
         if (videoRef.current) videoRef.current.srcObject = stream;
+
+        videoRef.current.onloadedmetadata = () => {
+          setVideoReady(true);
+        };
       } catch (err) {
         console.error("Camera error:", err.name, err.message);
         if (err.name === "NotAllowedError") {
@@ -85,20 +92,27 @@ export function BiometricSetup() {
 
     initCamera();
     return () => {
-      videoRef.current?.srcObject?.getTracks().forEach((t) => t.stop());
+      if (videoRef.current) {
+        videoRef.current.onloadeddata = null;
+        videoRef.current.srcObject?.getTracks().forEach((t) => t.stop());
+      }
     };
   }, [profileLoading, faceStatus]);
 
   async function registerFace() {
     setFaceStatus("scanning");
     setError(null);
+
+    if (!videoRef.current || !videoReady) {
+      setError("Camera not ready yet. Wait a moment and try again.");
+      setFaceStatus("idle");
+      return;
+    }
+
     try {
       const det = await faceapi
-        .detectSingleFace(
-          videoRef.current,
-          new faceapi.TinyFaceDetectorOptions(),
-        )
-        .withFaceLandmarks()
+        .detectSingleFace(videoRef.current, DETECT_OPTIONS)
+        .withFaceLandmarks(true)
         .withFaceDescriptor();
 
       if (!det) {
@@ -149,6 +163,7 @@ export function BiometricSetup() {
 
   const allDone = faceStatus === "done" && fpStatus === "done";
 
+  const captureReady = modelsLoaded && videoReady;
   if (profileLoading)
     return <Spinner label="Checking registration status..." />;
 
@@ -213,11 +228,11 @@ export function BiometricSetup() {
               <button
                 className="btn btn-primary btn-sm"
                 onClick={registerFace}
-                disabled={!modelsLoaded || faceStatus === "scanning"}
+                disabled={!captureReady || faceStatus === "scanning"}
               >
                 {faceStatus === "scanning"
                   ? "Capturing..."
-                  : modelsLoaded
+                  : captureReady
                     ? "Capture Face"
                     : "Loading models..."}
               </button>

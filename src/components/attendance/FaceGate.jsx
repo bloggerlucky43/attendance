@@ -1,8 +1,14 @@
 import { useRef, useState, useEffect } from "react";
 import * as faceapi from "face-api.js";
 import api from "../../lib/api.js";
+import { loadFaceModels } from "../../lib/faceModels.js";
 
 const THRESHOLD = 0.5;
+
+const DETECT_OPTIONS = new faceapi.TinyFaceDetectorOptions({
+  inputSize: 224,
+  scoreThreshold: THRESHOLD,
+});
 
 export function FaceGate({ sessionId, storedDescriptor, onPassed }) {
   const videoRef = useRef(null);
@@ -47,11 +53,7 @@ export function FaceGate({ sessionId, storedDescriptor, onPassed }) {
     async function init() {
       // Models
       try {
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri("/models"),
-          faceapi.nets.faceLandmark68Net.loadFromUri("/models"),
-          faceapi.nets.faceRecognitionNet.loadFromUri("/models"),
-        ]);
+        await loadFaceModels();
       } catch (err) {
         console.error("Model load error:", err);
         setError("Failed to load face recognition models.");
@@ -94,11 +96,8 @@ export function FaceGate({ sessionId, storedDescriptor, onPassed }) {
 
     try {
       const det = await faceapi
-        .detectSingleFace(
-          videoRef.current,
-          new faceapi.TinyFaceDetectorOptions(),
-        )
-        .withFaceLandmarks()
+        .detectSingleFace(videoRef.current, DETECT_OPTIONS)
+        .withFaceLandmarks(true)
         .withFaceDescriptor();
 
       if (!det) {

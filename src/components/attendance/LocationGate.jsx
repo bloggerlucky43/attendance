@@ -16,34 +16,36 @@ export function LocationGate({ sessionId, onPassed }) {
     }
 
     let settled = false;
+    let bestPosition = null; // ← track best fix seen so far
+    const ACCURACY_THRESHOLD = 50; // metres — accept fix once accuracy is good enough
+    const MAX_WAIT_MS = 15000; // stop waiting after 15s and use best available
 
     const watchId = navigator.geolocation.watchPosition(
       async (pos) => {
         if (settled) return;
+
+        // Track the most accurate fix seen so far
+        if (
+          !bestPosition ||
+          pos.coords.accuracy < bestPosition.coords.accuracy
+        ) {
+          bestPosition = pos;
+        }
+
+        const accuracyGoodEnough = pos.coords.accuracy <= ACCURACY_THRESHOLD;
+
+        // Only proceed if accuracy is good enough OR we've waited long enough (handled by timeout)
+        if (!accuracyGoodEnough) {
+          console.log(
+            `[Location] accuracy: ${pos.coords.accuracy.toFixed(1)}m — waiting for better fix...`,
+          );
+          return; // keep watching
+        }
+
+        // Good fix — proceed
         settled = true;
         navigator.geolocation.clearWatch(watchId);
-
-        try {
-          const { data } = await api.post(`/attendance/${sessionId}/location`, {
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-          });
-          if (data.passed) onPassed();
-          else {
-            setError("Location check failed. You may not be in the classroom.");
-            setStatus("failed");
-          }
-        } catch (err) {
-          const isHardBlock =
-            err.response?.status === 403 &&
-            err.response?.data?.gate === "location";
-          setError(
-            err.response?.data?.message ||
-              err.response?.data?.error ||
-              "Location check failed",
-          );
-          setStatus(isHardBlock ? "blocked" : "failed");
-        }
+        await submitLocation(bestPosition);
       },
       (err) => {
         if (settled) return;
@@ -60,20 +62,57 @@ export function LocationGate({ sessionId, onPassed }) {
       },
       {
         enableHighAccuracy: true,
-        timeout: 30000,
-        maximumAge: 60000,
+        timeout: MAX_WAIT_MS,
+        maximumAge: 0, // ← never use cached fix
       },
     );
 
-    // Hard safety net
+    // After MAX_WAIT_MS, use best fix available even if not ideal accuracy
     setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        navigator.geolocation.clearWatch(watchId);
-        setError("Location timed out. Please try again.");
+      if (settled) return;
+      settled = true;
+      navigator.geolocation.clearWatch(watchId);
+
+      if (bestPosition) {
+        console.log(
+          `[Location] timeout — using best fix: ${bestPosition.coords.accuracy.toFixed(1)}m accuracy`,
+        );
+        submitLocation(bestPosition);
+      } else {
+        setError(
+          "Location timed out. Move to a better signal area and try again.",
+        );
         setStatus("failed");
       }
-    }, 35000);
+    }, MAX_WAIT_MS);
+  }
+
+  async function submitLocation(pos) {
+    try {
+      console.log(
+        `[Location] submitting: lat=${pos.coords.latitude}, lng=${pos.coords.longitude}, accuracy=${pos.coords.accuracy.toFixed(1)}m`,
+      );
+      const { data } = await api.post(`/attendance/${sessionId}/location`, {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+      });
+      if (data.passed) onPassed();
+      else {
+        setError(
+          "You don't appear to be in the classroom. Move closer and try again.",
+        );
+        setStatus("failed");
+      }
+    } catch (err) {
+      const isHardBlock =
+        err.response?.status === 403 && err.response?.data?.gate === "location";
+      setError(
+        err.response?.data?.message ||
+          err.response?.data?.error ||
+          "Location check failed",
+      );
+      setStatus(isHardBlock ? "blocked" : "failed");
+    }
   }
 
   return (
@@ -98,13 +137,29 @@ export function LocationGate({ sessionId, onPassed }) {
         </>
       )}
       {(status === "idle" || status === "checking") && (
-        <button
-          className="btn btn-primary btn-full"
-          onClick={check}
-          disabled={status === "checking"}
-        >
-          {status === "checking" ? "Checking location..." : "Verify Location"}
-        </button>
+        <>
+          <button
+            className="btn btn-primary btn-full"
+            onClick={check}
+            disabled={status === "checking"}
+          >
+            {status === "checking"
+              ? "Getting accurate location..."
+              : "Verify Location"}
+          </button>
+          {status === "checking" && (
+            <p
+              style={{
+                fontSize: "0.78rem",
+                color: "var(--text-3)",
+                marginTop: "0.5rem",
+                textAlign: "center",
+              }}
+            >
+              Waiting for GPS signal — stay still for best results
+            </p>
+          )}
+        </>
       )}
     </div>
   );

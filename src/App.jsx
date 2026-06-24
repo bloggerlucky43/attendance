@@ -1,9 +1,9 @@
 // src/App.jsx
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ProtectedRoute } from "./routes/ProtectedRoute.jsx";
 import { Navbar } from "./components/common/Navbar.jsx";
 import { useAuth } from "./hooks/useAuth.js";
-
+import { Home } from "./pages/Home.jsx";
 import { Login } from "./pages/auth/Login.jsx";
 import { Register } from "./pages/auth/Register.jsx";
 import { AdminDashboard } from "./pages/admin/Dashboard.jsx";
@@ -14,6 +14,12 @@ import { SessionControl } from "./pages/lecturer/SessionControl.jsx";
 import { StudentDashboard } from "./pages/student/Dashboard.jsx";
 import { BiometricSetup } from "./pages/student/BiometricSetup.jsx";
 import { AttendSession } from "./pages/student/AttendSession.jsx";
+
+const DASHBOARD_PATH = {
+  admin: "/admin",
+  lecturer: "/lecturer",
+  student: "/student",
+};
 
 function Shell({ children }) {
   const { user } = useAuth();
@@ -26,10 +32,17 @@ function Shell({ children }) {
   );
 }
 
+function RootRoute() {
+  const { user } = useAuth();
+  if (user)
+    return <Navigate to={DASHBOARD_PATH[user.role] ?? "/login"} replace />;
+  return <Home />;
+}
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/" element={<RootRoute />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route

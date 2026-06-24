@@ -55,14 +55,14 @@ export function LocationGate({ sessionId, onPassed }) {
         const messages = {
           1: "Location access denied. Enable permissions and try again.",
           2: "Location unavailable. Check your device GPS or network.",
-          3: "Location timed out. Move to a better signal area and try again.",
+          3: "Could not get your location. Please check that location permissions are enabled, then try again.",
         };
         setError(messages[err.code] || "Could not get your location.");
         setStatus("failed");
       },
       {
         enableHighAccuracy: true,
-        timeout: MAX_WAIT_MS,
+        timeout: Infinity,
         maximumAge: 0, // ← never use cached fix
       },
     );

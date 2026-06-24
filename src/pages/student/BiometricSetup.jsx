@@ -1,4 +1,3 @@
-// error received was that the first argument must be of type string or an isntance of buffer,Array Butter or Array or an arraylike object, Received undefined
 import { useRef, useState, useEffect } from "react";
 import * as faceapi from "face-api.js";
 import {
@@ -10,61 +9,67 @@ import { Spinner } from "../../components/common/Spinner.jsx";
 import { loadFaceModels } from "../../lib/faceModels.js";
 
 const DETECT_OPTIONS = new faceapi.TinyFaceDetectorOptions({
-  inputSize: 224,
-  scoreThreshold: 0.5,
+  inputSize: 160,
+  scoreThreshold: 0.4,
 });
 
 export function BiometricSetup() {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const detectionLoopRef = useRef(null);
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [profileLoading, setProfileLoading] = useState(true);
   const [videoReady, setVideoReady] = useState(false);
-
-  // Initialise from DB — face may already be registered
-  const [faceStatus, setFaceStatus] = useState("idle"); // idle | scanning | done
-  const [fpStatus, setFpStatus] = useState("idle"); // idle | scanning | done
-
+  const [faceStatus, setFaceStatus] = useState("idle");
+  const [fpStatus, setFpStatus] = useState("idle");
   const [error, setError] = useState(null);
   const [cameraError, setCameraError] = useState(null);
 
-  // ── Step 1: fetch existing registration status from backend ──
   useEffect(() => {
     api
       .get("/students/me")
       .then(({ data }) => {
         const s = data.student;
+        console.log("[BiometricSetup] profile loaded:", s);
+        console.log(
+          "[BiometricSetup] face_descriptor present:",
+          !!s.face_descriptor,
+        );
         if (s.face_registered) setFaceStatus("done");
         if (s.fingerprint_registered) setFpStatus("done");
       })
-      .catch(() => {}) // non-fatal
+      .catch((err) =>
+        console.error("[BiometricSetup] profile fetch failed:", err),
+      )
       .finally(() => setProfileLoading(false));
   }, []);
 
-  // ── Step 2: only load models + camera if face NOT already done ──
   useEffect(() => {
-    if (profileLoading) return; // wait until we know face status
-    if (faceStatus === "done") return; // face already registered — skip camera entirely
+    if (profileLoading) return;
+    if (faceStatus === "done") return;
 
     let cancelled = false;
 
     async function initCamera() {
-      // Load models
+      console.log("[BiometricSetup] loading face models...");
       try {
         await loadFaceModels();
         setModelsLoaded(true);
+        console.log("[BiometricSetup] models loaded ✓");
       } catch (err) {
-        console.error("Model load error:", err);
-        setCameraError(
-          "Failed to load face recognition models. Make sure model files are in /public/models/.",
-        );
+        console.error("[BiometricSetup] model load failed:", err);
+        setCameraError("Failed to load face recognition models.");
         return;
       }
 
-      // Start camera — separate try so model errors don't hide camera errors
+      console.log("[BiometricSetup] requesting camera...");
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
+          video: {
+            facingMode: "user",
+            width: { ideal: 320 },
+            height: { ideal: 240 },
+          },
         });
 
         if (cancelled) {
@@ -73,18 +78,27 @@ export function BiometricSetup() {
         }
 
         streamRef.current = stream;
+        console.log("[BiometricSetup] camera stream acquired ✓");
 
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           videoRef.current.onloadeddata = () => {
-            if (!cancelled) setVideoReady(true);
+            if (!cancelled) {
+              console.log(
+                "[BiometricSetup] video has frames, readyState:",
+                videoRef.current?.readyState,
+              );
+              setVideoReady(true);
+              startDetectionLoop();
+            }
           };
         }
       } catch (err) {
-        console.error("Camera error:", err.name, err.message);
+        if (cancelled) return;
+        console.error("[BiometricSetup] camera error:", err.name, err.message);
         if (err.name === "NotAllowedError") {
           setCameraError(
-            "Camera access denied. Allow camera permission in your browser settings and reload.",
+            "Camera access denied. Allow camera permission and reload.",
           );
         } else if (err.name === "NotFoundError") {
           setCameraError("No camera found on this device.");
@@ -94,7 +108,7 @@ export function BiometricSetup() {
           );
         } else if (err.name === "SecurityError") {
           setCameraError(
-            "Camera blocked — the page must be served over HTTPS on mobile. Ask your admin to enable HTTPS.",
+            "Camera blocked — page must be served over HTTPS on mobile.",
           );
         } else {
           setCameraError(`Camera error: ${err.message}`);
@@ -105,46 +119,82 @@ export function BiometricSetup() {
     initCamera();
     return () => {
       cancelled = true;
-      if (videoRef.current) {
-        videoRef.current.onloadeddata = null;
-      }
+      if (detectionLoopRef.current) clearTimeout(detectionLoopRef.current);
+      if (videoRef.current) videoRef.current.onloadeddata = null;
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     };
   }, [profileLoading]);
 
-  async function registerFace() {
-    if (!videoRef.current || !videoReady) {
-      setError("Camera not ready yet. Wait a moment and try again.");
+  function startDetectionLoop() {
+    if (detectionLoopRef.current) clearTimeout(detectionLoopRef.current);
+    console.log("[BiometricSetup] detection loop started");
 
-      return;
-    }
-    setFaceStatus("scanning");
-    setError(null);
-
-    try {
-      const det = await faceapi
-        .detectSingleFace(videoRef.current, DETECT_OPTIONS)
-        .withFaceLandmarks(true)
-        .withFaceDescriptor();
-
-      if (!det) {
-        setError(
-          "No face detected. Centre your face in the frame and try again.",
+    async function detect() {
+      // ← Use DOM readyState — avoids stale closure on videoReady state
+      if (!videoRef.current || videoRef.current.readyState < 2) {
+        console.log(
+          "[BiometricSetup] video not ready yet, readyState:",
+          videoRef.current?.readyState,
         );
-        setFaceStatus("idle");
+        detectionLoopRef.current = setTimeout(detect, 500);
         return;
       }
 
+      try {
+        const det = await faceapi
+          .detectSingleFace(videoRef.current, DETECT_OPTIONS)
+          .withFaceLandmarks(true)
+          .withFaceDescriptor();
+
+        if (det) {
+          console.log(
+            "[BiometricSetup] face detected! score:",
+            det.detection.score.toFixed(3),
+          );
+          await captureAndSave(det);
+        } else {
+          console.log("[BiometricSetup] no face in frame, retrying...");
+          detectionLoopRef.current = setTimeout(detect, 300);
+        }
+      } catch (err) {
+        console.error("[BiometricSetup] detection error:", err.message);
+        detectionLoopRef.current = setTimeout(detect, 400);
+      }
+    }
+
+    detect();
+  }
+
+  async function captureAndSave(det) {
+    if (detectionLoopRef.current) {
+      clearTimeout(detectionLoopRef.current);
+      detectionLoopRef.current = null;
+    }
+
+    setFaceStatus("scanning");
+    setError(null);
+    console.log(
+      "[BiometricSetup] saving descriptor, length:",
+      det.descriptor.length,
+    );
+
+    try {
       await api.post("/students/face-register", {
         face_descriptor: Array.from(det.descriptor),
       });
 
-      videoRef.current?.srcObject?.getTracks().forEach((t) => t.stop());
+      console.log("[BiometricSetup] face registered successfully ✓");
+      streamRef.current?.getTracks().forEach((t) => t.stop()); // ← forEach fixed
       setFaceStatus("done");
     } catch (err) {
-      setError(err.response?.data?.error || "Face registration failed");
+      console.error("[BiometricSetup] save failed:", err);
+      setError(
+        err.response?.data?.error ||
+          "Face registration failed. Please try again.",
+      );
       setFaceStatus("idle");
+      startDetectionLoop();
     }
   }
 
@@ -176,7 +226,6 @@ export function BiometricSetup() {
 
   const allDone = faceStatus === "done" && fpStatus === "done";
 
-  const captureReady = modelsLoaded && videoReady;
   if (profileLoading)
     return <Spinner label="Checking registration status..." />;
 
@@ -223,13 +272,20 @@ export function BiometricSetup() {
             <div className="alert alert-error">{cameraError}</div>
           )}
 
+          {/* ← Single clean block, no duplicate video elements */}
           {faceStatus !== "done" && !cameraError && (
             <>
               <p>
-                Position your face in the frame and click capture. Good lighting
-                helps accuracy.
+                {faceStatus === "scanning"
+                  ? "Face detected — saving..."
+                  : videoReady
+                    ? "👀 Position your face in the frame — it will capture automatically"
+                    : "Starting camera..."}
               </p>
-              <div className="camera-wrap" style={{ marginBottom: "0.75rem" }}>
+              <div
+                className="camera-wrap"
+                style={{ marginBottom: "0.75rem", position: "relative" }}
+              >
                 <video
                   ref={videoRef}
                   autoPlay
@@ -237,18 +293,19 @@ export function BiometricSetup() {
                   playsInline
                   style={{ width: "100%", height: 200, objectFit: "cover" }}
                 />
+                {videoReady && faceStatus === "idle" && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      border: "2px solid var(--primary)",
+                      borderRadius: 8,
+                      animation: "pulse 1.5s infinite",
+                      pointerEvents: "none",
+                    }}
+                  />
+                )}
               </div>
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={registerFace}
-                disabled={!captureReady || faceStatus === "scanning"}
-              >
-                {faceStatus === "scanning"
-                  ? "Capturing..."
-                  : captureReady
-                    ? "Capture Face"
-                    : "Loading models..."}
-              </button>
             </>
           )}
         </div>
@@ -262,10 +319,7 @@ export function BiometricSetup() {
         <div className="setup-step-num">{fpStatus === "done" ? "✓" : "2"}</div>
         <div className="setup-step-body">
           <h3>Fingerprint Registration</h3>
-          <p>
-            Uses your device's built-in fingerprint sensor or Face ID. Works on
-            most modern phones and laptops.
-          </p>
+          <p>Uses your device's built-in fingerprint sensor or Face ID.</p>
 
           {fpStatus !== "done" && (
             <>
@@ -278,7 +332,6 @@ export function BiometricSetup() {
                   ? "Waiting for fingerprint..."
                   : "Register Fingerprint"}
               </button>
-
               {faceStatus !== "done" && (
                 <p
                   style={{

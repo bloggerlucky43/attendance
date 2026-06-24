@@ -985,6 +985,15 @@ a:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
 
 /* ── Responsive ──────────────────────────────────────────── */
 @media (max-width: 768px) {

@@ -78,7 +78,7 @@ export function LocationGate({ sessionId, onPassed }) {
 
   return (
     <div className="gate-card">
-      <div style={{ fontSize: "2rem", marginBottom: "0.75rem" }}>📍</div>
+      {/* <div style={{ fontSize: "2rem", marginBottom: "0.75rem" }}></div> */}
       <h3>Location Check</h3>
       <p>Confirm you're physically in the classroom.</p>
 

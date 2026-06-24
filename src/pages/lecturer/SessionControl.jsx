@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
 import api from "../../lib/api.js";
@@ -6,16 +6,67 @@ import socket from "../../lib/socket.js";
 
 export function SessionControl() {
   const { courseId } = useParams();
-  const [session, setSession] = useState(null);
+  const [session, setSession] = useState(null); // current active session
   const [qrUrl, setQrUrl] = useState(null);
   const [records, setRecords] = useState([]);
+  const [history, setHistory] = useState([]); // past sessions with submissions
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [pageLoading, setPageLoading] = useState(true); // initial fetch
   const [copied, setCopied] = useState(false);
+  const settledRef = useRef(false);
+
+  // ── On mount: restore active session + load history ──
+  useEffect(() => {
+    async function fetchSessions() {
+      try {
+        const { data } = await api.get(
+          `/sessions/my-sessions?course_id=${courseId}`,
+        );
+        const sessions = data.sessions;
+
+        const active = sessions.find((s) => s.status === "active");
+        const closed = sessions.filter((s) => s.status === "closed");
+
+        if (active) {
+          setSession(active);
+          // Reconstruct QR url from token
+          setQrUrl(`${window.location.origin}/attend/${active.session_token}`);
+          socket.emit("join:session", active.id);
+
+          // Fetch existing records for the restored session
+          const { data: recData } = await api.get(
+            `/sessions/${active.id}/attendance`,
+          );
+          setRecords(recData.records || []);
+        }
+
+        setHistory(closed);
+      } catch (err) {
+        console.error("Failed to load sessions:", err);
+      } finally {
+        setPageLoading(false);
+      }
+    }
+
+    fetchSessions();
+  }, [courseId]);
+
+  // ── Real-time: new attendance record ──
+  useEffect(() => {
+    if (!session) return;
+
+    socket.on("attendance:marked", (payload) => {
+      setRecords((prev) => [payload, ...prev]);
+    });
+
+    return () => socket.off("attendance:marked");
+  }, [session]);
 
   async function startSession() {
     setError(null);
     setLoading(true);
+    settledRef.current = false;
 
     if (!navigator.geolocation) {
       setError("Geolocation not supported on this device.");
@@ -23,12 +74,10 @@ export function SessionControl() {
       return;
     }
 
-    let settled = false; // prevent double-firing
-
     const watchId = navigator.geolocation.watchPosition(
       async (pos) => {
-        if (settled) return;
-        settled = true;
+        if (settledRef.current) return;
+        settledRef.current = true;
         navigator.geolocation.clearWatch(watchId);
 
         try {
@@ -40,6 +89,7 @@ export function SessionControl() {
           });
           setSession(data.session);
           setQrUrl(data.qrUrl);
+          setRecords([]);
           socket.emit("join:session", data.session.id);
         } catch (err) {
           setError(err.response?.data?.error || "Failed to start session");
@@ -48,8 +98,8 @@ export function SessionControl() {
         }
       },
       (err) => {
-        if (settled) return;
-        settled = true;
+        if (settledRef.current) return;
+        settledRef.current = true;
         navigator.geolocation.clearWatch(watchId);
 
         const messages = {
@@ -60,17 +110,12 @@ export function SessionControl() {
         setError(messages[err.code] || "Failed to get location.");
         setLoading(false);
       },
-      {
-        enableHighAccuracy: true, // ← back to true, watchPosition handles it better
-        timeout: 30000, // ← 30s total budget
-        maximumAge: 60000, // ← accept a 1-min cached fix instantly
-      },
+      { enableHighAccuracy: true, timeout: 30000, maximumAge: 60000 },
     );
 
-    // Hard safety net: if watchPosition never fires at all (rare browser bug)
     setTimeout(() => {
-      if (!settled) {
-        settled = true;
+      if (!settledRef.current) {
+        settledRef.current = true;
         navigator.geolocation.clearWatch(watchId);
         setError("Location timed out. Please try again.");
         setLoading(false);
@@ -82,22 +127,29 @@ export function SessionControl() {
     if (!session) return;
     try {
       await api.post(`/sessions/${session.id}/end`);
-      setSession((s) => ({ ...s, status: "closed" }));
+      const closed = { ...session, status: "closed" };
+      setSession(closed);
+      // Move to history if it has submissions
+      if (records.length > 0) {
+        setHistory((prev) => [
+          { ...closed, attendance_count: records.length },
+          ...prev,
+        ]);
+      }
     } catch (err) {
       setError(err.response?.data?.error || "Failed to end session");
     }
   }
 
-  async function exportCSV() {
-    if (!session) return;
+  async function exportCSV(sessionId) {
     try {
-      const res = await api.get(`/sessions/${session.id}/export`, {
+      const res = await api.get(`/sessions/${sessionId}/export`, {
         responseType: "blob",
       });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `attendance_${session.id.slice(0, 8)}.csv`;
+      a.download = `attendance_${sessionId.slice(0, 8)}.csv`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -114,13 +166,22 @@ export function SessionControl() {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  useEffect(() => {
-    if (!session) return;
-    socket.on("attendance:marked", (payload) => {
-      setRecords((prev) => [payload, ...prev]);
+  function formatDate(iso) {
+    return new Date(iso).toLocaleString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     });
-    return () => socket.off("attendance:marked");
-  }, [session]);
+  }
+
+  if (pageLoading)
+    return (
+      <div style={{ padding: "2rem" }}>
+        <p style={{ color: "var(--text-2)" }}>Loading sessions...</p>
+      </div>
+    );
 
   return (
     <div>
@@ -130,13 +191,17 @@ export function SessionControl() {
       </div>
 
       {error && (
-        <div className="alert alert-error" style={{ maxWidth: 520 }}>
+        <div
+          className="alert alert-error"
+          style={{ maxWidth: 520, marginBottom: "1rem" }}
+        >
           {error}
         </div>
       )}
 
+      {/* ── No active session ── */}
       {!session && (
-        <div className="card" style={{ maxWidth: 520 }}>
+        <div className="card" style={{ maxWidth: 520, marginBottom: "2rem" }}>
           <p
             style={{
               color: "var(--text-2)",
@@ -158,6 +223,7 @@ export function SessionControl() {
         </div>
       )}
 
+      {/* ── Active session ── */}
       {session?.status === "active" && (
         <div
           style={{
@@ -165,6 +231,7 @@ export function SessionControl() {
             gridTemplateColumns: "1fr 1fr",
             gap: "1rem",
             maxWidth: 720,
+            marginBottom: "2rem",
           }}
         >
           <div className="card">
@@ -231,7 +298,7 @@ export function SessionControl() {
                       color: "var(--text-2)",
                     }}
                   >
-                    Student checked in
+                    {r.student_name || r.matric_number || "Student"} checked in
                   </div>
                 ))}
               </div>
@@ -240,8 +307,9 @@ export function SessionControl() {
         </div>
       )}
 
+      {/* ── Just ended ── */}
       {session?.status === "closed" && (
-        <div className="card" style={{ maxWidth: 520 }}>
+        <div className="card" style={{ maxWidth: 520, marginBottom: "2rem" }}>
           <div
             className="alert alert-success"
             style={{ marginBottom: "1.25rem" }}
@@ -249,9 +317,77 @@ export function SessionControl() {
             Session ended. {records.length} student
             {records.length !== 1 ? "s" : ""} attended.
           </div>
-          <button className="btn btn-primary" onClick={exportCSV}>
-            Download CSV Report
-          </button>
+          <div style={{ display: "flex", gap: "0.75rem" }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => exportCSV(session.id)}
+            >
+              Download CSV
+            </button>
+            <button
+              className="btn btn-outline"
+              onClick={() => {
+                setSession(null);
+                setRecords([]);
+              }}
+            >
+              Start New Session
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Session history ── */}
+      {history.length > 0 && (
+        <div style={{ maxWidth: 720 }}>
+          <h3
+            style={{
+              marginBottom: "1rem",
+              fontSize: "1rem",
+              color: "var(--text-1)",
+            }}
+          >
+            Past Sessions
+          </h3>
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}
+          >
+            {history.map((s) => (
+              <div
+                key={s.id}
+                className="card"
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "1rem 1.25rem",
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      fontSize: "0.9rem",
+                      marginBottom: "0.2rem",
+                    }}
+                  >
+                    {s.courses?.course_code} — {formatDate(s.started_at)}
+                  </div>
+                  <div style={{ fontSize: "0.8rem", color: "var(--text-2)" }}>
+                    {s.attendance_count} student
+                    {s.attendance_count !== 1 ? "s" : ""} attended
+                    {s.ended_at ? ` · Ended ${formatDate(s.ended_at)}` : ""}
+                  </div>
+                </div>
+                <button
+                  className="btn btn-outline btn-sm"
+                  onClick={() => exportCSV(s.id)}
+                >
+                  Download CSV
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

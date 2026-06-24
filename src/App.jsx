@@ -8,6 +8,7 @@ import { Login } from "./pages/auth/Login.jsx";
 import { Register } from "./pages/auth/Register.jsx";
 import { AdminDashboard } from "./pages/admin/Dashboard.jsx";
 import { UploadStudents } from "./pages/admin/UploadStudents.jsx";
+import { AdminReports } from "./pages/admin/Reports.jsx";
 import { LecturerDashboard } from "./pages/lecturer/Dashboard.jsx";
 import { CreateCourse } from "./pages/lecturer/CreateCourse.jsx";
 import { SessionControl } from "./pages/lecturer/SessionControl.jsx";
@@ -71,6 +72,14 @@ export default function App() {
                   element={
                     <ProtectedRoute roles={["admin"]}>
                       <UploadStudents />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/reports"
+                  element={
+                    <ProtectedRoute roles={["admin"]}>
+                      <AdminReports />
                     </ProtectedRoute>
                   }
                 />

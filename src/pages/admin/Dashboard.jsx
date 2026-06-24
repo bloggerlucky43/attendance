@@ -39,11 +39,23 @@ export function AdminDashboard() {
       </h3>
 
       <Link to="/admin/upload-students" style={{ textDecoration: "none" }}>
-        <div className="course-item">
+        <div className="course-item" style={{ marginBottom: "1rem" }}>
           <div>
             <div className="course-code">Upload Students</div>
             <div className="course-name">
               Bulk-import student matric list from CSV
+            </div>
+          </div>
+          <span style={{ color: "var(--text-3)", fontSize: "1.2rem" }}>→</span>
+        </div>
+      </Link>
+
+      <Link to="/admin/reports" style={{ textDecoration: "none" }}>
+        <div className="course-item">
+          <div>
+            <div className="course-code">Attendance Reports</div>
+            <div className="course-name">
+              View course stats, check student eligibility, and export reports
             </div>
           </div>
           <span style={{ color: "var(--text-3)", fontSize: "1.2rem" }}>→</span>

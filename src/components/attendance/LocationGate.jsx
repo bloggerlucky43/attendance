@@ -17,8 +17,8 @@ export function LocationGate({ sessionId, onPassed }) {
 
     let settled = false;
     let bestPosition = null; // ← track best fix seen so far
-    const ACCURACY_THRESHOLD = 50; // metres — accept fix once accuracy is good enough
-    const MAX_WAIT_MS = 15000; // stop waiting after 15s and use best available
+    const ACCURACY_THRESHOLD = 150; // metres — accept fix once accuracy is good enough
+    const MAX_WAIT_MS = 10000; // stop waiting after 15s and use best available
 
     const watchId = navigator.geolocation.watchPosition(
       async (pos) => {
@@ -80,7 +80,7 @@ export function LocationGate({ sessionId, onPassed }) {
         submitLocation(bestPosition);
       } else {
         setError(
-          "Location timed out. Move to a better signal area and try again.",
+          "Could not get your location. Please check that location permissions are enabled, then try again.",
         );
         setStatus("failed");
       }

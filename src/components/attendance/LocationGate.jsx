@@ -17,7 +17,7 @@ export function LocationGate({ sessionId, onPassed }) {
 
     let settled = false;
     let bestPosition = null; // ← track best fix seen so far
-    const ACCURACY_THRESHOLD = 150; // metres — accept fix once accuracy is good enough
+    const ACCURACY_THRESHOLD = 300; // metres — accept fix once accuracy is good enough
     const MAX_WAIT_MS = 10000; // stop waiting after 15s and use best available
 
     const watchId = navigator.geolocation.watchPosition(
